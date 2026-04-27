@@ -2,7 +2,6 @@ CREATE TABLE `account` (
   `id` INT(11) NOT NULL AUTO_INCREMENT,
   `tax_id` VARCHAR(16) UNIQUE NOT NULL,
   `owner_name` VARCHAR(100) NOT NULL,
-  `balance` DECIMAL(17, 2) NOT NULL,
   `created_at` TIMESTAMP NOT NULL,
   `id_currency` INT(11) NOT NULL,
   PRIMARY KEY (`id`),
@@ -12,7 +11,7 @@ CREATE TABLE `account` (
 CREATE TABLE `transaction` (
   `id` INT(11) NOT NULL AUTO_INCREMENT,
   `id_account` INT(11) NOT NULL,
-  `type` ENUM(`DEPOSIT`,`WITHDRAWL`) NOT NULL,
+  `type` ENUM(`DEPOSIT`,`WITHDRAWAL`) NOT NULL,
   `amount` DECIMAL(17, 2) NOT NULL,
   `description` VARCHAR(255),
   `created_at` TIMESTAMP NOT NULL,
