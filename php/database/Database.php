@@ -1,6 +1,6 @@
 <?php
 
-class Database extends MySQLi
+class Database extends mysqli
 {
     static protected $instance = NULL;
 
