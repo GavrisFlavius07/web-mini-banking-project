@@ -5,21 +5,24 @@ use Psr\Http\Message\ResponseInterface as Response;
 use Psr\Http\Message\ServerRequestInterface as Request;
 
 require __DIR__ . '/vendor/autoload.php';
-require __DIR__ . '/controllers/AlunniController.php';
+require __DIR__ . '/controllers/TransactionController.php';
 
 $app = AppFactory::create();
+//GET `/account/{id_account}/transaction` per ottenere l'elenco dei movimenti
+$app->get('/account/{id_account}/transaction','transactionController:showLogs');
 
-$app->get('/test', function (Request $request, Response $response, array $args) {
-    $response->getBody()->write("Test page");
-    return $response;
-});
+//GET `/account/{id_account}/transaction/{id}` per ottenere il dettaglio di un movimento
+$app->get('/account/{id_account}/transaction/{id}','transactionController:showTrasaction');
 
-$app->get('/hello/{name}', function (Request $request, Response $response, array $args) {
-    $name = $args['name'];
-    $response->getBody()->write("Hello, $name");
-    return $response;
-});
+//POST `/account/{id_account}/deposit` per registrare un deposito
+$app->post('/account/{id_account}/deposit','transactionController:deposit');
 
-$app->get('/alunni', "AlunniController:index");
+//POST `/account/{id_account}/withdrawal` per registrare un prelievo
+$app->post('/account/{id_account}/withdrawal','transactionController:withdraw');
+//PUT `/account/{id_account}/transaction/{id}` per modificare la descrizione di un movimento
+$app->put('/account/{id_account}/transaction/{id}','transactionController:editDescription');
+
+//DELETE `/account/{id_account}/transaction/{id}` per eliminare un movimento (solo l'ultima transazione)
+$app->delete('/account/{id_account}/transaction/{id}','transactionController:deleteLast');
 
 $app->run();

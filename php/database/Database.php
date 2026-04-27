@@ -4,8 +4,8 @@ class Database extends MySQLi
 {
     static protected $instance = NULL;
 
-    protected function __constructor() {
-        parent::__constructor('my_mariadb', 'root', 'ciccio', 'banking');
+    protected function __construct() {
+        parent::__construct('my_mariadb', 'root', 'ciccio', 'banking');
     }
 
     static function instance() {
