@@ -7,13 +7,11 @@ class transactionContoller {
     $conn = Database::instance();
 
     if(!is_numeric($args['id_account']) ){
-      return $response-> withStatus(404);
+      return $response-> withBody() -> withStatus(400);
     }
 
     $accountID = $args['id_account'];
-
-
-    $stmt = $conn -> prepare("SELECT * FROM 'transaction' WHERE 'id_account' ") 
+    $stmt = $conn -> prepare("SELECT * FROM 'transaction' WHERE 'id_account' = ?"); 
 
 
 
