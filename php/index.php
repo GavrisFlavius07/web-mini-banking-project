@@ -10,7 +10,7 @@ require __DIR__ . '/controllers/BalanceController.php';
 $app = AppFactory::create();
 
 $app->get('/account/{id_account}/balance', 'BalanceController:show');
-$app->get('/account/{id_account}/balance/convert/fiat', 'BalanceController:index');
-$app->get('/account/{id_account}/balance/convert/crypto', 'BalanceController:index');
+$app->get('/account/{id_account}/balance/convert/fiat', 'BalanceController:convert_fiat');
+$app->get('/account/{id_account}/balance/convert/crypto', 'BalanceController:convert_crypto');
 
 $app->run();
