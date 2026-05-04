@@ -15,10 +15,19 @@ class BalanceController
     }
     $id_account = intval($args['id_account']);
 
-    $stmt = $conn->prepare("SELECT `balance_after` `balance` FROM `transaction` WHERE `id_account` = ? ORDER BY `created_at` DESC LIMIT 1");
+    $sql = "SELECT `c`.`name` `currency`, `t`.`balance_after` `balance`
+      FROM `account` `a`
+      JOIN `currency` `c` ON `a`.`id_currency` = `c`.`id`
+      JOIN `transaction` `t` ON `a`.`id` = `t`.`id_account`
+      WHERE `id_account` = ?
+      ORDER BY `t`.`created_at` DESC, `t`.`id` DESC
+      LIMIT 1;";
+
+    $stmt = $conn->prepare($sql);
     $stmt->bind_param('i', $id_account);
     if (!$stmt->execute()) {
-      return $response->withBody('Query error')->withStatus(400);
+      $response->getBody()->write(json_encode(['error' => 'Query error', 'code' => 400]));
+      return $response->withHeader('Content-Type', 'application/json')->withStatus(400);
     }
     $result = $stmt->get_result();
 
@@ -29,9 +38,10 @@ class BalanceController
       return $response->withHeader('Content-Type', 'application/json')->withStatus(404);
     }
 
+    $currency = $results[0]['currency'];
     $balance = $results[0]['balance'];
 
-    $response->getBody()->write(json_encode(['balance' => $balance]));
+    $response->getBody()->write(json_encode(['currency' => $currency, 'balance' => $balance]));
     return $response->withHeader("Content-type", "application/json")->withStatus(200);
   }
 
@@ -90,9 +100,21 @@ class BalanceController
 
     $conversion = json_decode(file_get_contents("https://api.frankfurter.dev/v2/rates?base=$from&quotes=$to"), true)[0];
     $rate = $conversion['rate'];
+    $date = $conversion['date'] ?? null;
+
     $converted = $balance * $rate;
 
-    $response->getBody()->write(json_encode(['currency' => $to, 'balance' => $converted]));
+    $response->getBody()->write(json_encode([
+      'id_account' => $id_account,
+      'provider' => 'Frankfurter',
+      'conversion_type' => 'fiat',
+      'from_currency' => $from,
+      'to_currency' => $to,
+      'original_balance' => $balance,
+      'converted_balance' => $converted,
+      'rate' => $rate,
+      'date' => $date
+    ]));
     return $response->withHeader('Content-Type', 'application/json')->withStatus(200);
   }
 
@@ -152,9 +174,21 @@ class BalanceController
 
     $conversion = json_decode(file_get_contents("https://api.frankfurter.dev/v2/rates?base=$from&quotes=$to"), true)[0];
     $rate = $conversion['rate'];
+    $date = $conversion['date'] ?? null;
+
     $converted = $balance * $rate;
 
-    $response->getBody()->write(json_encode(['currency' => $to, 'balance' => $converted]));
+    $response->getBody()->write(json_encode([
+      'id_account' => $id_account,
+      'provider' => 'Frankfurter',
+      'conversion_type' => 'fiat',
+      'from_currency' => $from,
+      'to_currency' => $to,
+      'original_balance' => $balance,
+      'converted_balance' => $converted,
+      'rate' => $rate,
+      'date' => $date
+    ]));
     return $response->withHeader('Content-Type', 'application/json')->withStatus(200);
   }
 }
