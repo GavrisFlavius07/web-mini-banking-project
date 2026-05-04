@@ -41,7 +41,11 @@ class BalanceController
     $currency = $results[0]['currency'];
     $balance = $results[0]['balance'];
 
-    $response->getBody()->write(json_encode(['currency' => $currency, 'balance' => $balance]));
+    $response->getBody()->write(json_encode([
+      'id_account' => $id_account,
+      'currency' => $currency,
+      'balance' => $balance
+    ]));
     return $response->withHeader("Content-type", "application/json")->withStatus(200);
   }
 
@@ -94,7 +98,17 @@ class BalanceController
     $balance = floatval($results[0]['balance']);
 
     if ($from == $to) {
-      $response->getBody()->write(json_encode(['currency' => $to, 'balance' => $balance]));
+      $response->getBody()->write(json_encode([
+        'id_account' => $id_account,
+        'provider' => 'Frankfurter',
+        'conversion_type' => 'fiat',
+        'from_currency' => $from,
+        'to_currency' => $to,
+        'original_balance' => $balance,
+        'converted_balance' => $balance,
+        'rate' => 1.0,
+        'date' => null
+      ]));
       return $response->withHeader('Content-Type', 'application/json')->withStatus(200);
     }
 
@@ -102,7 +116,7 @@ class BalanceController
     $rate = $conversion['rate'];
     $date = $conversion['date'] ?? null;
 
-    $converted = $balance * $rate;
+    $converted = round($balance * $rate, 2);
 
     $response->getBody()->write(json_encode([
       'id_account' => $id_account,
@@ -119,6 +133,11 @@ class BalanceController
   }
 
   // TODO: this whole method
+  // TODO: fetch base assets
+
+  // APIs:
+  // https://api.binance.com/api/v3/ticker/price?symbol=BTCUSD
+  // https://api.binance.com/api/v3/exchangeInfo
   public function convert_crypto(Request $request, Response $response, $args) {
     $params = $request->getQueryParams();
     $conn = Database::instance();
