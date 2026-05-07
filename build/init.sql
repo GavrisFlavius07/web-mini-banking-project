@@ -15,7 +15,7 @@ CREATE TABLE `account` (
   FOREIGN KEY (`id_currency`) REFERENCES `currency`(`id`) ON UPDATE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
 
-CREATE TABLE `transactions` (
+CREATE TABLE `transaction` (
   `id` INT(11) NOT NULL AUTO_INCREMENT,
   `id_account` INT(11) NOT NULL,
   `type` ENUM('DEPOSIT','WITHDRAWAL') NOT NULL,
