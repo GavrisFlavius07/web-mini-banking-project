@@ -1,213 +1,527 @@
 <?php
+
 use Psr\Http\Message\ResponseInterface as Response;
 use Psr\Http\Message\ServerRequestInterface as Request;
 
-require __DIR__ . '/../database/Database.php';
-
-class BalanceController
+class TransactionController
 {
-  public function show(Request $request, Response $response, $args) {
-    $conn = Database::instance();
-    
-    if (!is_numeric($args['id_account'])) {
-      $response->getBody()->write(json_encode(['error' => 'Invalid account id', 'code' => 400]));
-      return $response->withHeader('Content-Type', 'application/json')->withStatus(400);
-    }
-    $id_account = intval($args['id_account']);
+    private function json(Response $response, array $data, int $status = 200)
+    {
+        $response->getBody()->write(json_encode($data));
 
-    $sql = "SELECT `c`.`name` `currency`, `t`.`balance_after` `balance`
-      FROM `account` `a`
-      JOIN `currency` `c` ON `a`.`id_currency` = `c`.`id`
-      JOIN `transaction` `t` ON `a`.`id` = `t`.`id_account`
-      WHERE `id_account` = ?
-      ORDER BY `t`.`created_at` DESC, `t`.`id` DESC
-      LIMIT 1;";
-
-    $stmt = $conn->prepare($sql);
-    $stmt->bind_param('i', $id_account);
-    if (!$stmt->execute()) {
-      $response->getBody()->write(json_encode(['error' => 'Query error', 'code' => 400]));
-      return $response->withHeader('Content-Type', 'application/json')->withStatus(400);
-    }
-    $result = $stmt->get_result();
-
-    $results = $result->fetch_all(MYSQLI_ASSOC);
-
-    if (empty($results)) {
-      $response->getBody()->write(json_encode(['error' => 'Transaction for given account id not found', 'code' => 404]));
-      return $response->withHeader('Content-Type', 'application/json')->withStatus(404);
+        return $response
+            ->withHeader('Content-Type', 'application/json')
+            ->withStatus($status);
     }
 
-    $currency = $results[0]['currency'];
-    $balance = $results[0]['balance'];
+    private function getCurrentBalance(PDO $conn, int $accountId): float
+    {
+        $stmt = $conn->prepare("
+            SELECT balance_after
+            FROM transactions
+            WHERE id_account = ?
+            ORDER BY created_at DESC, id DESC
+            LIMIT 1
+        ");
 
-    $response->getBody()->write(json_encode([
-      'id_account' => $id_account,
-      'currency' => $currency,
-      'balance' => $balance
-    ]));
-    return $response->withHeader("Content-type", "application/json")->withStatus(200);
-  }
+        $stmt->execute([$accountId]);
 
-  public function convert_fiat(Request $request, Response $response, $args) {
-    $params = $request->getQueryParams();
-    $conn = Database::instance();
-    
-    if (!is_numeric($args['id_account'])) {
-      $response->getBody()->write(json_encode(['error' => 'Invalid account id', 'code' => 400]));
-      return $response->withHeader('Content-Type', 'application/json')->withStatus(400);
-    }
-    $id_account = intval($args['id_account']);
+        $transaction = $stmt->fetch(PDO::FETCH_ASSOC);
 
-    if (!isset($params['to'])) {
-      $response->getBody()->write(json_encode(['error' => 'Invalid or not present param "to"', 'code' => 400]));
-      return $response->withHeader('Content-Type', 'application/json')->withStatus(400);
-    }
-    $to = $params['to'];
-
-    $currencies = array_map(function ($x) {return $x[0];}, $conn->query("SELECT `name` FROM `currency`")->fetch_all());
-
-    if (!in_array($to, $currencies)) {
-      $response->getBody()->write(json_encode(['error' => 'Currency "to" not found', 'code' => 404]));
-      return $response->withHeader('Content-Type', 'application/json')->withStatus(404);
+        return $transaction
+            ? (float)$transaction['balance_after']
+            : 0;
     }
 
-    $sql = "SELECT `c`.`name` `curr`, `t`.`balance_after` `balance`
-      FROM `account` `a`
-      JOIN `currency` `c` ON `a`.`id_currency` = `c`.`id`
-      JOIN `transaction` `t` ON `a`.`id` = `t`.`id_account`
-      WHERE `id_account` = ?
-      ORDER BY `t`.`created_at` DESC
-      LIMIT 1;";
+    private function accountExists(PDO $conn, int $accountId): bool
+    {
+        $stmt = $conn->prepare("
+            SELECT id
+            FROM account
+            WHERE id = ?
+        ");
 
-    $stmt = $conn->prepare($sql);
-    $stmt->bind_param('i', $id_account);
-    if (!$stmt->execute()) {
-      return $response->withBody('Query error')->withStatus(400);
-    }
-    $result = $stmt->get_result();
+        $stmt->execute([$accountId]);
 
-    $results = $result->fetch_all(MYSQLI_ASSOC);
-
-    if (empty($results)) {
-      $response->getBody()->write(json_encode(['error' => 'Transaction for given account id not found', 'code' => 404]));
-      return $response->withHeader('Content-Type', 'application/json')->withStatus(404);
+        return (bool)$stmt->fetch(PDO::FETCH_ASSOC);
     }
 
-    $from = $results[0]['curr'];
-    $balance = floatval($results[0]['balance']);
+    public function showLogs(Request $request, Response $response, array $args)
+    {
+        $conn = Database::instance();
 
-    if ($from == $to) {
-      $response->getBody()->write(json_encode([
-        'id_account' => $id_account,
-        'provider' => 'Frankfurter',
-        'conversion_type' => 'fiat',
-        'from_currency' => $from,
-        'to_currency' => $to,
-        'original_balance' => $balance,
-        'converted_balance' => $balance,
-        'rate' => 1.0,
-        'date' => null
-      ]));
-      return $response->withHeader('Content-Type', 'application/json')->withStatus(200);
+        if (!is_numeric($args['id_account'])) {
+            return $this->json($response, [
+                "error" => "Invalid account id"
+            ], 400);
+        }
+
+        $accountId = (int)$args['id_account'];
+
+        if (!$this->accountExists($conn, $accountId)) {
+            return $this->json($response, [
+                "error" => "Account not found"
+            ], 404);
+        }
+
+        $stmt = $conn->prepare("
+            SELECT
+                id,
+                id_account,
+                type,
+                amount,
+                description,
+                created_at,
+                balance_after
+            FROM transactions
+            WHERE id_account = ?
+            ORDER BY created_at DESC, id DESC
+        ");
+
+        $stmt->execute([$accountId]);
+
+        $transactions = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+        return $this->json($response, [
+            "transactions" => $transactions
+        ]);
     }
 
-    $conversion = json_decode(file_get_contents("https://api.frankfurter.dev/v2/rates?base=$from&quotes=$to"), true)[0];
-    $rate = $conversion['rate'];
-    $date = $conversion['date'] ?? null;
+    public function showTransaction(Request $request, Response $response, array $args)
+    {
+        $conn = Database::instance();
 
-    $converted = round($balance * $rate, 2);
+        if (
+            !is_numeric($args['id_account']) ||
+            !is_numeric($args['id'])
+        ) {
+            return $this->json($response, [
+                "error" => "Invalid id"
+            ], 400);
+        }
 
-    $response->getBody()->write(json_encode([
-      'id_account' => $id_account,
-      'provider' => 'Frankfurter',
-      'conversion_type' => 'fiat',
-      'from_currency' => $from,
-      'to_currency' => $to,
-      'original_balance' => $balance,
-      'converted_balance' => $converted,
-      'rate' => $rate,
-      'date' => $date
-    ]));
-    return $response->withHeader('Content-Type', 'application/json')->withStatus(200);
-  }
+        $accountId = (int)$args['id_account'];
+        $transactionId = (int)$args['id'];
 
-  // TODO: this whole method
-  // TODO: fetch base assets
+        $stmt = $conn->prepare("
+            SELECT
+                id,
+                id_account,
+                type,
+                amount,
+                description,
+                created_at,
+                balance_after
+            FROM transactions
+            WHERE id = ?
+            AND id_account = ?
+        ");
 
-  // APIs:
-  // https://api.binance.com/api/v3/ticker/price?symbol=BTCUSD
-  // https://api.binance.com/api/v3/exchangeInfo
-  public function convert_crypto(Request $request, Response $response, $args) {
-    $params = $request->getQueryParams();
-    $conn = Database::instance();
-    
-    if (!is_numeric($args['id_account'])) {
-      $response->getBody()->write(json_encode(['error' => 'Invalid account id', 'code' => 400]));
-      return $response->withHeader('Content-Type', 'application/json')->withStatus(400);
-    }
-    $id_account = intval($args['id_account']);
+        $stmt->execute([$transactionId, $accountId]);
 
-    if (!isset($params['to'])) {
-      $response->getBody()->write(json_encode(['error' => 'Invalid or not present param "to"', 'code' => 400]));
-      return $response->withHeader('Content-Type', 'application/json')->withStatus(400);
-    }
-    $to = $params['to'];
+        $transaction = $stmt->fetch(PDO::FETCH_ASSOC);
 
-    $currencies = array_map(function ($x) {return $x[0];}, $conn->query("SELECT `name` FROM `currency`")->fetch_all());
+        if (!$transaction) {
+            return $this->json($response, [
+                "error" => "Transaction not found"
+            ], 404);
+        }
 
-    if (!in_array($to, $currencies)) {
-      $response->getBody()->write(json_encode(['error' => 'Currency "to" not found', 'code' => 404]));
-      return $response->withHeader('Content-Type', 'application/json')->withStatus(404);
+        return $this->json($response, $transaction);
     }
 
-    $sql = "SELECT `c`.`name` `curr`, `t`.`balance_after` `balance`
-      FROM `account` `a`
-      JOIN `currency` `c` ON `a`.`id_currency` = `c`.`id`
-      JOIN `transaction` `t` ON `a`.`id` = `t`.`id_account`
-      WHERE `id_account` = ?
-      ORDER BY `t`.`created_at` DESC
-      LIMIT 1;";
+    public function deposit(Request $request, Response $response, array $args)
+    {
+        $conn = Database::instance();
 
-    $stmt = $conn->prepare($sql);
-    $stmt->bind_param('i', $id_account);
-    if (!$stmt->execute()) {
-      return $response->withBody('Query error')->withStatus(400);
+        if (!is_numeric($args['id_account'])) {
+            return $this->json($response, [
+                "error" => "Invalid account id"
+            ], 400);
+        }
+
+        $accountId = (int)$args['id_account'];
+
+        if (!$this->accountExists($conn, $accountId)) {
+            return $this->json($response, [
+                "error" => "Account not found"
+            ], 404);
+        }
+
+        $body = json_decode($request->getBody(), true);
+
+        if (!$body) {
+            return $this->json($response, [
+                "error" => "Invalid JSON body"
+            ], 400);
+        }
+
+        $amount = (float)($body['amount'] ?? 0);
+        $description = trim($body['description'] ?? '');
+
+        if ($amount <= 0) {
+            return $this->json($response, [
+                "error" => "Amount must be greater than zero"
+            ], 400);
+        }
+
+        $currentBalance = $this->getCurrentBalance($conn, $accountId);
+
+        $newBalance = $currentBalance + $amount;
+
+        $stmt = $conn->prepare("
+            INSERT INTO transactions
+            (
+                id_account,
+                type,
+                amount,
+                description,
+                balance_after
+            )
+            VALUES
+            (
+                ?,
+                'DEPOSIT',
+                ?,
+                ?,
+                ?
+            )
+        ");
+
+        $success = $stmt->execute([
+            $accountId,
+            $amount,
+            $description,
+            $newBalance
+        ]);
+
+        if (!$success) {
+            return $this->json($response, [
+                "error" => "Database error"
+            ], 500);
+        }
+
+        return $this->json($response, [
+            "message" => "Deposit successful",
+            "account_id" => $accountId,
+            "amount" => $amount,
+            "new_balance" => $newBalance
+        ], 201);
     }
-    $result = $stmt->get_result();
 
-    $results = $result->fetch_all(MYSQLI_ASSOC);
+    public function withdraw(Request $request, Response $response, array $args)
+    {
+        $conn = Database::instance();
 
-    if (empty($results)) {
-      $response->getBody()->write(json_encode(['error' => 'Transaction for given account id not found', 'code' => 404]));
-      return $response->withHeader('Content-Type', 'application/json')->withStatus(404);
+        if (!is_numeric($args['id_account'])) {
+            return $this->json($response, [
+                "error" => "Invalid account id"
+            ], 400);
+        }
+
+        $accountId = (int)$args['id_account'];
+
+        if (!$this->accountExists($conn, $accountId)) {
+            return $this->json($response, [
+                "error" => "Account not found"
+            ], 404);
+        }
+
+        $body = json_decode($request->getBody(), true);
+
+        if (!$body) {
+            return $this->json($response, [
+                "error" => "Invalid JSON body"
+            ], 400);
+        }
+
+        $amount = (float)($body['amount'] ?? 0);
+        $description = trim($body['description'] ?? '');
+
+        if ($amount <= 0) {
+            return $this->json($response, [
+                "error" => "Amount must be greater than zero"
+            ], 400);
+        }
+
+        $currentBalance = $this->getCurrentBalance($conn, $accountId);
+
+        if ($amount > $currentBalance) {
+            return $this->json($response, [
+                "error" => "Insufficient funds",
+                "current_balance" => $currentBalance
+            ], 422);
+        }
+
+        $newBalance = $currentBalance - $amount;
+
+        $stmt = $conn->prepare("
+            INSERT INTO transactions
+            (
+                id_account,
+                type,
+                amount,
+                description,
+                balance_after
+            )
+            VALUES
+            (
+                ?,
+                'WITHDRAWAL',
+                ?,
+                ?,
+                ?
+            )
+        ");
+
+        $success = $stmt->execute([
+            $accountId,
+            $amount,
+            $description,
+            $newBalance
+        ]);
+
+        if (!$success) {
+            return $this->json($response, [
+                "error" => "Database error"
+            ], 500);
+        }
+
+        return $this->json($response, [
+            "message" => "Withdrawal successful",
+            "account_id" => $accountId,
+            "amount" => $amount,
+            "new_balance" => $newBalance
+        ], 201);
     }
 
-    $from = $results[0]['curr'];
-    $balance = floatval($results[0]['balance']);
+    public function getBalance(Request $request, Response $response, array $args)
+    {
+        $conn = Database::instance();
 
-    if ($from == $to) {
-      $response->getBody()->write(json_encode(['currency' => $to, 'balance' => $balance]));
-      return $response->withHeader('Content-Type', 'application/json')->withStatus(200);
+        if (!is_numeric($args['id_account'])) {
+            return $this->json($response, [
+                "error" => "Invalid account id"
+            ], 400);
+        }
+
+        $accountId = (int)$args['id_account'];
+
+        $stmt = $conn->prepare("
+            SELECT
+                a.id,
+                a.owner_name,
+                c.name AS currency
+            FROM account a
+            INNER JOIN currency c
+                ON a.id_currency = c.id
+            WHERE a.id = ?
+        ");
+
+        $stmt->execute([$accountId]);
+
+        $account = $stmt->fetch(PDO::FETCH_ASSOC);
+
+        if (!$account) {
+            return $this->json($response, [
+                "error" => "Account not found"
+            ], 404);
+        }
+
+        $balance = $this->getCurrentBalance($conn, $accountId);
+
+        return $this->json($response, [
+            "account_id" => $account['id'],
+            "owner_name" => $account['owner_name'],
+            "currency" => $account['currency'],
+            "balance" => $balance
+        ]);
     }
 
-    $conversion = json_decode(file_get_contents("https://api.frankfurter.dev/v2/rates?base=$from&quotes=$to"), true)[0];
-    $rate = $conversion['rate'];
-    $date = $conversion['date'] ?? null;
+    public function convertFiat(Request $request, Response $response, array $args)
+    {
+        $conn = Database::instance();
 
-    $converted = $balance * $rate;
+        if (!is_numeric($args['id_account'])) {
+            return $this->json($response, [
+                "error" => "Invalid account id"
+            ], 400);
+        }
 
-    $response->getBody()->write(json_encode([
-      'id_account' => $id_account,
-      'provider' => 'Frankfurter',
-      'conversion_type' => 'fiat',
-      'from_currency' => $from,
-      'to_currency' => $to,
-      'original_balance' => $balance,
-      'converted_balance' => $converted,
-      'rate' => $rate,
-      'date' => $date
-    ]));
-    return $response->withHeader('Content-Type', 'application/json')->withStatus(200);
-  }
+        $accountId = (int)$args['id_account'];
+
+        $params = $request->getQueryParams();
+
+        $to = strtoupper(trim($params['to'] ?? ''));
+
+        if (!$to) {
+            return $this->json($response, [
+                "error" => "Missing target currency"
+            ], 400);
+        }
+
+        $stmt = $conn->prepare("
+            SELECT
+                a.id,
+                c.name AS currency
+            FROM account a
+            INNER JOIN currency c
+                ON a.id_currency = c.id
+            WHERE a.id = ?
+        ");
+
+        $stmt->execute([$accountId]);
+
+        $account = $stmt->fetch(PDO::FETCH_ASSOC);
+
+        if (!$account) {
+            return $this->json($response, [
+                "error" => "Account not found"
+            ], 404);
+        }
+
+        $from = strtoupper($account['currency']);
+
+        $balance = $this->getCurrentBalance($conn, $accountId);
+
+        $url = "https://api.frankfurter.dev/v1/latest?base={$from}&symbols={$to}";
+
+        $json = @file_get_contents($url);
+
+        if ($json === false) {
+            return $this->json($response, [
+                "error" => "Frankfurter API unavailable"
+            ], 502);
+        }
+
+        $data = json_decode($json, true);
+
+        if (!isset($data['rates'][$to])) {
+            return $this->json($response, [
+                "error" => "Unsupported target currency"
+            ], 400);
+        }
+
+        $rate = (float)$data['rates'][$to];
+
+        $convertedBalance = round($balance * $rate, 2);
+
+        return $this->json($response, [
+            "account_id" => $accountId,
+            "provider" => "Frankfurter",
+            "conversion_type" => "fiat",
+            "from_currency" => $from,
+            "to_currency" => $to,
+            "original_balance" => $balance,
+            "rate" => $rate,
+            "converted_balance" => $convertedBalance,
+            "date" => $data['date'] ?? null
+        ]);
+    }
+
+    public function convertCrypto(Request $request, Response $response, array $args)
+    {
+        $conn = Database::instance();
+
+        if (!is_numeric($args['id_account'])) {
+            return $this->json($response, [
+                "error" => "Invalid account id"
+            ], 400);
+        }
+
+        $accountId = (int)$args['id_account'];
+
+        $params = $request->getQueryParams();
+
+        $to = strtoupper(trim($params['to'] ?? ''));
+
+        if (!$to) {
+            return $this->json($response, [
+                "error" => "Missing target crypto"
+            ], 400);
+        }
+
+        $stmt = $conn->prepare("
+            SELECT
+                a.id,
+                c.name AS currency
+            FROM account a
+            INNER JOIN currency c
+                ON a.id_currency = c.id
+            WHERE a.id = ?
+        ");
+
+        $stmt->execute([$accountId]);
+
+        $account = $stmt->fetch(PDO::FETCH_ASSOC);
+
+        if (!$account) {
+            return $this->json($response, [
+                "error" => "Account not found"
+            ], 404);
+        }
+
+        $fromCurrency = strtoupper($account['currency']);
+
+        $balance = $this->getCurrentBalance($conn, $accountId);
+
+        $marketSymbol = $to . $fromCurrency;
+
+        $exchangeInfoUrl =
+            "https://api.binance.com/api/v3/exchangeInfo?symbol={$marketSymbol}";
+
+        $exchangeJson = @file_get_contents($exchangeInfoUrl);
+
+        if ($exchangeJson === false) {
+            return $this->json($response, [
+                "error" => "Binance API unavailable"
+            ], 502);
+        }
+
+        $exchangeData = json_decode($exchangeJson, true);
+
+        if (
+            !isset($exchangeData['symbols']) ||
+            empty($exchangeData['symbols'])
+        ) {
+            return $this->json($response, [
+                "error" => "Invalid Binance market symbol"
+            ], 400);
+        }
+
+        $priceUrl =
+            "https://api.binance.com/api/v3/ticker/price?symbol={$marketSymbol}";
+
+        $priceJson = @file_get_contents($priceUrl);
+
+        if ($priceJson === false) {
+            return $this->json($response, [
+                "error" => "Unable to fetch crypto price"
+            ], 502);
+        }
+
+        $priceData = json_decode($priceJson, true);
+
+        if (!isset($priceData['price'])) {
+            return $this->json($response, [
+                "error" => "Crypto price not available"
+            ], 400);
+        }
+
+        $price = (float)$priceData['price'];
+
+        $convertedAmount = round($balance / $price, 8);
+
+        return $this->json($response, [
+            "account_id" => $accountId,
+            "provider" => "Binance",
+            "conversion_type" => "crypto",
+            "from_currency" => $fromCurrency,
+            "to_crypto" => $to,
+            "market_symbol" => $marketSymbol,
+            "original_balance" => $balance,
+            "price" => $price,
+            "converted_amount" => $convertedAmount
+        ]);
+    }
 }
