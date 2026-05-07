@@ -18,7 +18,7 @@ CREATE TABLE `account` (
 CREATE TABLE `transaction` (
   `id` INT(11) NOT NULL AUTO_INCREMENT,
   `id_account` INT(11) NOT NULL,
-  `type` ENUM('DEPOSIT','WITHDRAWAL') NOT NULL,
+  `type` ENUM('DEPOSIT','WITHDRAW') NOT NULL,
   `amount` DECIMAL(17, 2) NOT NULL,
   `description` VARCHAR(255),
   `created_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
