@@ -48,34 +48,4 @@ class AccountController{
       return $this->json($response, ['error' => 'Database error', 'code' => 500], 500);
     }
   }
-
-  public function transactionsByAccount(Request $request, Response $response, $args){
-    if (!isset($args['id_account']) || !ctype_digit((string) $args['id_account'])) {
-      return $this->json($response, ['error' => 'Invalid account id', 'code' => 400], 400);
-    }
-
-    try {
-      $conn = Database::instance();
-      $id_account = (int) $args['id_account'];
-
-      $account = $conn->prepare("SELECT `id` FROM `account` WHERE `id` = ?");
-      $account->bind_param('i', $id_account);
-      $account->execute();
-
-      if ($account->get_result()->num_rows === 0) {
-        return $this->json($response, ['error' => 'Account not found', 'code' => 404], 404);
-      }
-
-      $stmt = $conn->prepare("SELECT `id`, `id_account`, `type`, `amount`, `description`, `created_at`, `balance_after`
-        FROM `transaction`
-        WHERE `id_account` = ?
-        ORDER BY `created_at`, `id`");
-      $stmt->bind_param('i', $id_account);
-      $stmt->execute();
-
-      return $this->json($response, $stmt->get_result()->fetch_all(MYSQLI_ASSOC));
-    } catch (Throwable $e) {
-      return $this->json($response, ['error' => 'Database error', 'code' => 500], 500);
-    }
-  }
 }
