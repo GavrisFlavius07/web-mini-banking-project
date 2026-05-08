@@ -10,11 +10,18 @@ require __DIR__ . '/controllers/BalanceController.php';
 
 $app = AppFactory::create();
 
-$app->get('/account',"AccountController:accounts");
-$app->get('/currency',"AccountController:currencies");
-$app->get('/trans',"AccountController:transactions");
+$app->addRoutingMiddleware();
+$app->addErrorMiddleware(true, true, true);
 
-$app->get('/account/{id_account}/balance', 'BalanceController:show');
-$app->get('/account/{id_account}/balance/convert/fiat', 'BalanceController:convert_fiat');
+$accountController = new AccountController();
+$balanceController = new BalanceController();
+
+$app->get('/account', [$accountController, 'accounts']);
+$app->get('/currency', [$accountController, 'currencies']);
+$app->get('/trans', [$accountController, 'transactions']);
+$app->get('/account/{id_account}/transaction', [$accountController, 'transactionsByAccount']);
+
+$app->get('/account/{id_account}/balance', [$balanceController, 'show']);
+$app->get('/account/{id_account}/balance/convert/fiat', [$balanceController, 'convert_fiat']);
 
 $app->run();

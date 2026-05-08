@@ -6,208 +6,159 @@ require_once __DIR__ . '/../database/Database.php';
 
 class BalanceController
 {
-  public function show(Request $request, Response $response, $args) {
-    $conn = Database::instance();
-    
-    if (!is_numeric($args['id_account'])) {
-      $response->getBody()->write(json_encode(['error' => 'Invalid account id', 'code' => 400]));
-      return $response->withHeader('Content-Type', 'application/json')->withStatus(400);
-    }
-    $id_account = intval($args['id_account']);
+  private const FRANKFURTER_URL = 'https://api.frankfurter.dev/v2/rates';
 
-    $sql = "SELECT `c`.`name` `currency`, `t`.`balance_after` `balance`
+  private function json(Response $response, array $payload, int $status = 200): Response {
+    $response->getBody()->write(json_encode($payload, JSON_UNESCAPED_SLASHES));
+    return $response->withHeader('Content-Type', 'application/json')->withStatus($status);
+  }
+
+  private function parseAccountId($args) {
+    if (!isset($args['id_account']) || !ctype_digit((string) $args['id_account'])) {
+      return null;
+    }
+
+    return (int) $args['id_account'];
+  }
+
+  private function getLatestBalance(mysqli $conn, int $id_account): ?array {
+    $sql = "SELECT `a`.`id` AS `id_account`, `c`.`name` AS `currency`, `t`.`balance_after` AS `balance`
       FROM `account` `a`
       JOIN `currency` `c` ON `a`.`id_currency` = `c`.`id`
-      JOIN `transaction` `t` ON `a`.`id` = `t`.`id_account`
-      WHERE `id_account` = ?
+      LEFT JOIN `transaction` `t` ON `a`.`id` = `t`.`id_account`
+      WHERE `a`.`id` = ?
       ORDER BY `t`.`created_at` DESC, `t`.`id` DESC
-      LIMIT 1;";
+      LIMIT 1";
 
     $stmt = $conn->prepare($sql);
     $stmt->bind_param('i', $id_account);
-    if (!$stmt->execute()) {
-      $response->getBody()->write(json_encode(['error' => 'Query error', 'code' => 400]));
-      return $response->withHeader('Content-Type', 'application/json')->withStatus(400);
-    }
-    $result = $stmt->get_result();
+    $stmt->execute();
 
-    $results = $result->fetch_all(MYSQLI_ASSOC);
-
-    if (empty($results)) {
-      $response->getBody()->write(json_encode(['error' => 'Transaction for given account id not found', 'code' => 404]));
-      return $response->withHeader('Content-Type', 'application/json')->withStatus(404);
+    $row = $stmt->get_result()->fetch_assoc();
+    if ($row === null) {
+      return null;
     }
 
-    $currency = $results[0]['currency'];
-    $balance = $results[0]['balance'];
+    if ($row['balance'] === null) {
+      $row['balance'] = '0.00';
+    }
 
-    $response->getBody()->write(json_encode([
-      'id_account' => $id_account,
-      'currency' => $currency,
-      'balance' => $balance
-    ]));
-    return $response->withHeader("Content-type", "application/json")->withStatus(200);
+    return $row;
+  }
+
+  private function getCurrencyNames(mysqli $conn): array {
+    $result = $conn->query("SELECT `name` FROM `currency` ORDER BY `name`");
+
+    return array_column($result->fetch_all(MYSQLI_ASSOC), 'name');
+  }
+
+  private function fetchFiatRate(string $from, string $to): array {
+    $url = self::FRANKFURTER_URL . '?base=' . rawurlencode($from) . '&quotes=' . rawurlencode($to);
+    $context = stream_context_create([
+      'http' => [
+        'method' => 'GET',
+        'timeout' => 5,
+        'ignore_errors' => true,
+      ],
+    ]);
+
+    $body = @file_get_contents($url, false, $context);
+    if ($body === false) {
+      throw new RuntimeException('Currency provider is unavailable');
+    }
+
+    $payload = json_decode($body, true);
+    if (!is_array($payload) || !isset($payload[0]['rate']) || !is_numeric($payload[0]['rate'])) {
+      throw new RuntimeException('Currency provider returned an invalid response');
+    }
+
+    return [
+      'rate' => (float) $payload[0]['rate'],
+      'date' => $payload[0]['date'] ?? null,
+    ];
+  }
+
+  public function show(Request $request, Response $response, $args) {
+    $id_account = $this->parseAccountId($args);
+    if ($id_account === null) {
+      return $this->json($response, ['error' => 'Invalid account id', 'code' => 400], 400);
+    }
+
+    try {
+      $balance = $this->getLatestBalance(Database::instance(), $id_account);
+      if ($balance === null) {
+        return $this->json($response, ['error' => 'Account not found', 'code' => 404], 404);
+      }
+
+      return $this->json($response, [
+        'id_account' => $id_account,
+        'currency' => $balance['currency'],
+        'balance' => (float) $balance['balance'],
+      ]);
+    } catch (Throwable $e) {
+      return $this->json($response, ['error' => 'Database error', 'code' => 500], 500);
+    }
   }
 
   public function convert_fiat(Request $request, Response $response, $args) {
+    $id_account = $this->parseAccountId($args);
+    if ($id_account === null) {
+      return $this->json($response, ['error' => 'Invalid account id', 'code' => 400], 400);
+    }
+
     $params = $request->getQueryParams();
-    $conn = Database::instance();
-    
-    if (!is_numeric($args['id_account'])) {
-      $response->getBody()->write(json_encode(['error' => 'Invalid account id', 'code' => 400]));
-      return $response->withHeader('Content-Type', 'application/json')->withStatus(400);
-    }
-    $id_account = intval($args['id_account']);
-
-    if (!isset($params['to'])) {
-      $response->getBody()->write(json_encode(['error' => 'Invalid or not present param "to"', 'code' => 400]));
-      return $response->withHeader('Content-Type', 'application/json')->withStatus(400);
-    }
-    $to = $params['to'];
-
-    $currencies = array_map(function ($x) {return $x[0];}, $conn->query("SELECT `name` FROM `currency`")->fetch_all());
-
-    if (!in_array($to, $currencies)) {
-      $response->getBody()->write(json_encode(['error' => 'Currency "to" not found', 'code' => 404]));
-      return $response->withHeader('Content-Type', 'application/json')->withStatus(404);
+    $to = strtoupper(trim($params['to'] ?? ''));
+    if ($to === '') {
+      return $this->json($response, ['error' => 'Invalid or missing param "to"', 'code' => 400], 400);
     }
 
-    $sql = "SELECT `c`.`name` `curr`, `t`.`balance_after` `balance`
-      FROM `account` `a`
-      JOIN `currency` `c` ON `a`.`id_currency` = `c`.`id`
-      JOIN `transaction` `t` ON `a`.`id` = `t`.`id_account`
-      WHERE `id_account` = ?
-      ORDER BY `t`.`created_at` DESC
-      LIMIT 1;";
+    try {
+      $conn = Database::instance();
+      if (!in_array($to, $this->getCurrencyNames($conn), true)) {
+        return $this->json($response, ['error' => 'Currency "to" not found', 'code' => 404], 404);
+      }
 
-    $stmt = $conn->prepare($sql);
-    $stmt->bind_param('i', $id_account);
-    if (!$stmt->execute()) {
-      return $response->withBody('Query error')->withStatus(400);
-    }
-    $result = $stmt->get_result();
+      $latest = $this->getLatestBalance($conn, $id_account);
+      if ($latest === null) {
+        return $this->json($response, ['error' => 'Account not found', 'code' => 404], 404);
+      }
 
-    $results = $result->fetch_all(MYSQLI_ASSOC);
+      $from = $latest['currency'];
+      $balance = (float) $latest['balance'];
 
-    if (empty($results)) {
-      $response->getBody()->write(json_encode(['error' => 'Transaction for given account id not found', 'code' => 404]));
-      return $response->withHeader('Content-Type', 'application/json')->withStatus(404);
-    }
+      if ($from === $to) {
+        return $this->json($response, [
+          'id_account' => $id_account,
+          'provider' => 'Frankfurter',
+          'conversion_type' => 'fiat',
+          'from_currency' => $from,
+          'to_currency' => $to,
+          'original_balance' => $balance,
+          'converted_balance' => $balance,
+          'rate' => 1.0,
+          'date' => null,
+        ]);
+      }
 
-    $from = $results[0]['curr'];
-    $balance = floatval($results[0]['balance']);
+      try {
+        $conversion = $this->fetchFiatRate($from, $to);
+      } catch (Throwable $e) {
+        return $this->json($response, ['error' => $e->getMessage(), 'code' => 502], 502);
+      }
 
-    if ($from == $to) {
-      $response->getBody()->write(json_encode([
+      return $this->json($response, [
         'id_account' => $id_account,
         'provider' => 'Frankfurter',
         'conversion_type' => 'fiat',
         'from_currency' => $from,
         'to_currency' => $to,
         'original_balance' => $balance,
-        'converted_balance' => $balance,
-        'rate' => 1.0,
-        'date' => null
-      ]));
-      return $response->withHeader('Content-Type', 'application/json')->withStatus(200);
+        'converted_balance' => round($balance * $conversion['rate'], 2),
+        'rate' => $conversion['rate'],
+        'date' => $conversion['date'],
+      ]);
+    } catch (Throwable $e) {
+      return $this->json($response, ['error' => 'Database error', 'code' => 500], 500);
     }
-
-    $conversion = json_decode(file_get_contents("https://api.frankfurter.dev/v2/rates?base=$from&quotes=$to"), true)[0];
-    $rate = $conversion['rate'];
-    $date = $conversion['date'] ?? null;
-
-    $converted = round($balance * $rate, 2);
-
-    $response->getBody()->write(json_encode([
-      'id_account' => $id_account,
-      'provider' => 'Frankfurter',
-      'conversion_type' => 'fiat',
-      'from_currency' => $from,
-      'to_currency' => $to,
-      'original_balance' => $balance,
-      'converted_balance' => $converted,
-      'rate' => $rate,
-      'date' => $date
-    ]));
-    return $response->withHeader('Content-Type', 'application/json')->withStatus(200);
-  }
-
-  // TODO: this whole method
-  // TODO: fetch base assets
-
-  // APIs:
-  // https://api.binance.com/api/v3/ticker/price?symbol=BTCUSD
-  // https://api.binance.com/api/v3/exchangeInfo
-  public function convert_crypto(Request $request, Response $response, $args) {
-    $params = $request->getQueryParams();
-    $conn = Database::instance();
-    
-    if (!is_numeric($args['id_account'])) {
-      $response->getBody()->write(json_encode(['error' => 'Invalid account id', 'code' => 400]));
-      return $response->withHeader('Content-Type', 'application/json')->withStatus(400);
-    }
-    $id_account = intval($args['id_account']);
-
-    if (!isset($params['to'])) {
-      $response->getBody()->write(json_encode(['error' => 'Invalid or not present param "to"', 'code' => 400]));
-      return $response->withHeader('Content-Type', 'application/json')->withStatus(400);
-    }
-    $to = $params['to'];
-
-    $currencies = array_map(function ($x) {return $x[0];}, $conn->query("SELECT `name` FROM `currency`")->fetch_all());
-
-    if (!in_array($to, $currencies)) {
-      $response->getBody()->write(json_encode(['error' => 'Currency "to" not found', 'code' => 404]));
-      return $response->withHeader('Content-Type', 'application/json')->withStatus(404);
-    }
-
-    $sql = "SELECT `c`.`name` `curr`, `t`.`balance_after` `balance`
-      FROM `account` `a`
-      JOIN `currency` `c` ON `a`.`id_currency` = `c`.`id`
-      JOIN `transaction` `t` ON `a`.`id` = `t`.`id_account`
-      WHERE `id_account` = ?
-      ORDER BY `t`.`created_at` DESC
-      LIMIT 1;";
-
-    $stmt = $conn->prepare($sql);
-    $stmt->bind_param('i', $id_account);
-    if (!$stmt->execute()) {
-      return $response->withBody('Query error')->withStatus(400);
-    }
-    $result = $stmt->get_result();
-
-    $results = $result->fetch_all(MYSQLI_ASSOC);
-
-    if (empty($results)) {
-      $response->getBody()->write(json_encode(['error' => 'Transaction for given account id not found', 'code' => 404]));
-      return $response->withHeader('Content-Type', 'application/json')->withStatus(404);
-    }
-
-    $from = $results[0]['curr'];
-    $balance = floatval($results[0]['balance']);
-
-    if ($from == $to) {
-      $response->getBody()->write(json_encode(['currency' => $to, 'balance' => $balance]));
-      return $response->withHeader('Content-Type', 'application/json')->withStatus(200);
-    }
-
-    $conversion = json_decode(file_get_contents("https://api.frankfurter.dev/v2/rates?base=$from&quotes=$to"), true)[0];
-    $rate = $conversion['rate'];
-    $date = $conversion['date'] ?? null;
-
-    $converted = $balance * $rate;
-
-    $response->getBody()->write(json_encode([
-      'id_account' => $id_account,
-      'provider' => 'Frankfurter',
-      'conversion_type' => 'fiat',
-      'from_currency' => $from,
-      'to_currency' => $to,
-      'original_balance' => $balance,
-      'converted_balance' => $converted,
-      'rate' => $rate,
-      'date' => $date
-    ]));
-    return $response->withHeader('Content-Type', 'application/json')->withStatus(200);
   }
 }

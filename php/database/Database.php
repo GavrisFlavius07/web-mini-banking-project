@@ -2,15 +2,32 @@
 
 class Database extends mysqli
 {
-    static protected $instance = NULL;
+    private static $instance = null;
 
-    protected function __construct() {
+    private function __construct()
+    {
+        mysqli_report(MYSQLI_REPORT_ERROR | MYSQLI_REPORT_STRICT);
+
         parent::__construct('my_mariadb', 'root', 'ciccio', 'banking');
+        $this->set_charset('utf8mb4');
     }
 
-    static function instance() {
-        if ($instance == NULL)
-            $instance = new Database();
-        return $instance;
+    public static function instance(): self
+    {
+        if (self::$instance === null) {
+            self::$instance = new self();
+        }
+
+        return self::$instance;
+    }
+
+    public function __clone()
+    {
+        throw new RuntimeException('Database singleton cannot be cloned');
+    }
+
+    public function __wakeup()
+    {
+        throw new RuntimeException('Database singleton cannot be unserialized');
     }
 }

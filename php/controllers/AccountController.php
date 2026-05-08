@@ -5,30 +5,77 @@ use Psr\Http\Message\ServerRequestInterface as Request;
 require_once __DIR__ . '/../database/Database.php';
 
 class AccountController{
-  public function accounts(Request $request, Response $response, $args){
-    $conn = Database::instance();
-    $result = $conn->query("SELECT * FROM account");
-    $rows = $result->fetch_all(MYSQLI_ASSOC);
+  private function json(Response $response, array $payload, int $status = 200): Response {
+    $response->getBody()->write(json_encode($payload, JSON_UNESCAPED_SLASHES));
+    return $response->withHeader('Content-Type', 'application/json')->withStatus($status);
+  }
 
-    $response->getBody()->write(json_encode($rows));
-    return $response->withHeader("Content-Type", "application/json")->withStatus(200);
+  public function accounts(Request $request, Response $response, $args){
+    try {
+      $conn = Database::instance();
+      $sql = "SELECT `a`.`id`, `a`.`tax_id`, `a`.`owner_name`, `a`.`created_at`, `c`.`name` AS `currency`
+        FROM `account` `a`
+        JOIN `currency` `c` ON `a`.`id_currency` = `c`.`id`
+        ORDER BY `a`.`id`";
+      $result = $conn->query($sql);
+
+      return $this->json($response, $result->fetch_all(MYSQLI_ASSOC));
+    } catch (Throwable $e) {
+      return $this->json($response, ['error' => 'Database error', 'code' => 500], 500);
+    }
   }
 
   public function currencies(Request $request, Response $response, $args){
-    $conn = Database::instance();
-    $result = $conn->query("SELECT * FROM currency");
-    $rows = $result->fetch_all(MYSQLI_ASSOC);
+    try {
+      $conn = Database::instance();
+      $result = $conn->query("SELECT `id`, `name` FROM `currency` ORDER BY `name`");
 
-    $response->getBody()->write(json_encode($rows));
-    return $response->withHeader("Content-Type", "application/json")->withStatus(200);
+      return $this->json($response, $result->fetch_all(MYSQLI_ASSOC));
+    } catch (Throwable $e) {
+      return $this->json($response, ['error' => 'Database error', 'code' => 500], 500);
+    }
   }
 
   public function transactions(Request $request, Response $response, $args){
-    $conn = Database::instance();
-    $result = $conn->query("SELECT * FROM transaction");
-    $rows = $result->fetch_all(MYSQLI_ASSOC);
+    try {
+      $conn = Database::instance();
+      $result = $conn->query("SELECT `id`, `id_account`, `type`, `amount`, `description`, `created_at`, `balance_after`
+        FROM `transaction`
+        ORDER BY `id_account`, `created_at`, `id`");
 
-    $response->getBody()->write(json_encode($rows));
-    return $response->withHeader("Content-Type", "application/json")->withStatus(200);
+      return $this->json($response, $result->fetch_all(MYSQLI_ASSOC));
+    } catch (Throwable $e) {
+      return $this->json($response, ['error' => 'Database error', 'code' => 500], 500);
+    }
+  }
+
+  public function transactionsByAccount(Request $request, Response $response, $args){
+    if (!isset($args['id_account']) || !ctype_digit((string) $args['id_account'])) {
+      return $this->json($response, ['error' => 'Invalid account id', 'code' => 400], 400);
+    }
+
+    try {
+      $conn = Database::instance();
+      $id_account = (int) $args['id_account'];
+
+      $account = $conn->prepare("SELECT `id` FROM `account` WHERE `id` = ?");
+      $account->bind_param('i', $id_account);
+      $account->execute();
+
+      if ($account->get_result()->num_rows === 0) {
+        return $this->json($response, ['error' => 'Account not found', 'code' => 404], 404);
+      }
+
+      $stmt = $conn->prepare("SELECT `id`, `id_account`, `type`, `amount`, `description`, `created_at`, `balance_after`
+        FROM `transaction`
+        WHERE `id_account` = ?
+        ORDER BY `created_at`, `id`");
+      $stmt->bind_param('i', $id_account);
+      $stmt->execute();
+
+      return $this->json($response, $stmt->get_result()->fetch_all(MYSQLI_ASSOC));
+    } catch (Throwable $e) {
+      return $this->json($response, ['error' => 'Database error', 'code' => 500], 500);
+    }
   }
 }
