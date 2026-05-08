@@ -2,7 +2,7 @@
 use Psr\Http\Message\ResponseInterface as Response;
 use Psr\Http\Message\ServerRequestInterface as Request;
 
-require __DIR__ . '/../database/Database.php';
+require_once __DIR__ . '/../database/Database.php';
 
 class BalanceController
 {
