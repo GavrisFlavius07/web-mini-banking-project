@@ -24,6 +24,7 @@ $app->get('/trans', [$accountController, 'transactions']);
 
 $app->get('/account/{id_account}/balance', [$balanceController, 'show']);
 $app->get('/account/{id_account}/balance/convert/fiat', [$balanceController, 'convert_fiat']);
+$app->get('/account/{id_account}/balance/convert/crypto', [$balanceController, 'convert_crypto']);
 
 $app->get('/account/{id_account}/transaction', [$transactionController, 'showLogs']);
 $app->get('/account/{id_account}/transaction/{id}', [$transactionController, 'showTrasaction']);
