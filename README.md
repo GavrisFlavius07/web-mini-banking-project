@@ -32,3 +32,52 @@ I campi monimi sono `amount` e `description`.
 
 ## Su Windows
 `docker-compose up`
+
+## Testing:
+
+# ACCOUNT
+curl -X GET http://localhost:8000/account
+
+# CURRENCIES
+curl -X GET http://localhost:8000/currency
+
+# TRANSACTIONS SUMMARY
+curl -X GET http://localhost:8000/trans
+
+# BALANCE
+curl -X GET http://localhost:8000/account/1/balance
+
+# CONVERT FIAT
+curl -X GET "http://localhost:8000/account/1/balance/convert/fiat?to=USD"
+
+# GET ALL TRANSACTIONS
+curl -X GET http://localhost:8000/account/1/transaction
+
+# GET SINGLE TRANSACTION
+curl -X GET http://localhost:8000/account/1/transaction/1
+
+# DEPOSIT
+curl -X POST http://localhost:8000/account/1/deposit \
+-H "Content-Type: application/json" \
+-d '{"amount":100,"description":"deposit test"}'
+
+# WITHDRAWAL
+curl -X POST http://localhost:8000/account/1/withdrawal \
+-H "Content-Type: application/json" \
+-d '{"amount":50,"description":"withdraw test"}'
+
+# EDIT DESCRIPTION
+curl -X PUT http://localhost:8000/account/1/transaction/1 \
+-H "Content-Type: application/json" \
+-d '{"description":"updated description"}'
+
+# DELETE LAST TRANSACTION
+curl -X DELETE http://localhost:8000/account/1/transaction/1
+
+# ERROR TEST - INVALID ACCOUNT
+curl -X GET http://localhost:8000/account/9999/balance
+
+# ERROR TEST - NEGATIVE DEPOSIT
+curl -X POST http://localhost:8000/account/1/deposit \
+-H "Content-Type: application/json" \
+-d '{"amount":-10}'
