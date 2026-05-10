@@ -11,9 +11,10 @@ services:
       - 8080:80
     volumes:
       - "./php:/var/www/html"
+    depends_on:
+      - my_mariadb
 
   my_mariadb:
-    user: ${MY_UID}:${MY_GID}
     build:
       context: ./build
       dockerfile: Dockerfile.mariadb
@@ -24,8 +25,10 @@ services:
       - MARIADB_ROOT_PASSWORD=ciccio
       - MARIADB_DATABASE=banking
     volumes:
-      - "./mysql:/var/lib/mysql"
-      - "./build/init.sql:/docker-entrypoint-initdb.d/init.sql"
+      # Init scripts run only when this volume is empty.
+      # Force a clean DB reload with: docker compose down -v
+      - "mariadb_data:/var/lib/mysql"
+      - "./build/init.sql:/docker-entrypoint-initdb.d/001-init.sql:ro"
 
   my_phpMyAdmin:
     image: phpmyadmin
@@ -47,3 +50,5 @@ services:
     volumes:
       - "./app:/app"
 
+volumes:
+  mariadb_data:
